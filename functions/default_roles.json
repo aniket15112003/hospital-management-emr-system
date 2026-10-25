@@ -1,0 +1,183 @@
+{
+  "admin": {
+    "name": "Admin",
+    "permissions": {
+      "dashboard": [
+        "view"
+      ],
+      "departments": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "doctors": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "users": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "opd_charges": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "lab_tests": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "medicines": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "wards_rooms_beds": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "billing_masters": [
+        "approve",
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "prescription_templates": [
+        "create",
+        "deactivate",
+        "edit",
+        "view"
+      ],
+      "roles": [
+        "view"
+      ],
+      "numbering": [
+        "manage",
+        "view"
+      ],
+      "hospital_profile": [
+        "manage",
+        "view"
+      ],
+      "print_settings": [
+        "manage",
+        "view"
+      ],
+      "reports": [
+        "view"
+      ],
+      "audit_logs": [
+        "view"
+      ],
+      "backup": [
+        "view"
+      ],
+      "system_settings": [
+        "manage",
+        "view"
+      ]
+    }
+  },
+  "receptionist": {
+    "name": "Receptionist",
+    "permissions": {
+      "dashboard": [
+        "view"
+      ],
+      "departments": [
+        "view"
+      ],
+      "doctors": [
+        "view"
+      ],
+      "opd_charges": [
+        "view"
+      ]
+    }
+  },
+  "doctor": {
+    "name": "Doctor",
+    "permissions": {
+      "dashboard": [
+        "view"
+      ],
+      "departments": [
+        "view"
+      ],
+      "doctors": [
+        "view"
+      ],
+      "lab_tests": [
+        "view"
+      ],
+      "medicines": [
+        "view"
+      ],
+      "prescription_templates": [
+        "view"
+      ]
+    }
+  },
+  "lab_user": {
+    "name": "Lab User",
+    "permissions": {
+      "dashboard": [
+        "view"
+      ],
+      "lab_tests": [
+        "view"
+      ]
+    }
+  },
+  "pharmacy_user": {
+    "name": "Medical/Pharmacy User",
+    "permissions": {
+      "dashboard": [
+        "view"
+      ],
+      "medicines": [
+        "view"
+      ]
+    }
+  },
+  "nursing_user": {
+    "name": "IPD/Nursing User",
+    "permissions": {
+      "dashboard": [
+        "view"
+      ],
+      "wards_rooms_beds": [
+        "view"
+      ]
+    }
+  },
+  "accounts_user": {
+    "name": "Accounts User",
+    "permissions": {
+      "dashboard": [
+        "view"
+      ],
+      "opd_charges": [
+        "view"
+      ],
+      "billing_masters": [
+        "view"
+      ],
+      "reports": [
+        "view"
+      ]
+    }
+  }
+}

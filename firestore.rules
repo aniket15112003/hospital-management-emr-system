@@ -1,0 +1,320 @@
+rules_version = '2';
+
+// Hospital Management & EMR — Admin Panel security rules.
+//
+// Model:
+//   * Role comes from the Firebase Auth custom claim `role` (set only by
+//     Cloud Functions / the bootstrap script).
+//   * A user must have an `active` profile in users/{uid}.
+//   * Module permissions live in roles/{roleId}.permissions as
+//     { module: [actions] }. Super Admin is implicitly allowed everything.
+//   * Master data is never deleted — only activated/deactivated.
+//   * users, audit_logs, counters and backup_runs are written only by
+//     trusted backend code (Admin SDK bypasses these rules).
+//   * Collections not listed here (future modules) are denied by default.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- identity & permissions ----------
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function role() { return request.auth.token.get('role', ''); }
+    function docPath(col, id) { return /databases/$(database)/documents/$(col)/$(id); }
+
+    function isActive() {
+      return signedIn()
+        && exists(docPath('users', uid()))
+        && get(docPath('users', uid())).data.status == 'active';
+    }
+
+    function can(module, action) {
+      return isActive() && (
+        role() == 'super_admin' || (
+          role() != ''
+          && exists(docPath('roles', role()))
+          && get(docPath('roles', role())).data.get('permissions', {})
+               .get(module, []).hasAny([action])
+        )
+      );
+    }
+
+    function isSuper() { return isActive() && role() == 'super_admin'; }
+
+    // ---------- write metadata conventions ----------
+    function stampedNow() {
+      return request.resource.data.updatedBy == uid()
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validStatus() {
+      return request.resource.data.status in ['active', 'inactive'];
+    }
+
+    function nonEmpty(field, max) {
+      return request.resource.data[field] is string
+        && request.resource.data[field].size() > 0
+        && request.resource.data[field].size() <= max;
+    }
+
+    function optNumber(field) {
+      return !request.resource.data.keys().hasAny([field])
+        || request.resource.data[field] == null
+        || (request.resource.data[field] is number && request.resource.data[field] >= 0);
+    }
+
+    function changed(field) {
+      return request.resource.data.get(field, null) != resource.data.get(field, null);
+    }
+
+    function onlyStatusChange() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['status', 'updatedAt', 'updatedBy']);
+    }
+
+    function refActive(col, id) {
+      return id is string && exists(docPath(col, id))
+        && get(docPath(col, id)).data.status == 'active';
+    }
+
+    function canCreate(module) {
+      return can(module, 'create') && validStatus() && stampedNow()
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.createdBy == uid();
+    }
+
+    // Edit (status unchanged) needs `edit`; activation toggles need
+    // `deactivate` and may change nothing else.
+    function canUpdate(module) {
+      return validStatus() && stampedNow()
+        && !changed('createdAt') && !changed('createdBy')
+        && (
+          (!changed('status') && can(module, 'edit'))
+          || (onlyStatusChange() && can(module, 'deactivate'))
+        );
+    }
+
+    // ---------- users / roles ----------
+    match /users/{userId} {
+      allow read: if (signedIn() && uid() == userId) || can('users', 'view');
+      allow write: if false; // Cloud Functions only
+    }
+
+    match /roles/{roleId} {
+      allow read: if isActive();
+      allow create, update: if isSuper()
+        && roleId != 'super_admin'
+        && request.resource.data.permissions is map
+        && stampedNow();
+      allow delete: if false;
+    }
+
+    // ---------- uniqueness reservations ----------
+    function moduleOf(col) {
+      return {
+        'departments': 'departments',
+        'doctors': 'doctors',
+        'opd_charges': 'opd_charges',
+        'lab_tests': 'lab_tests',
+        'medicines': 'medicines',
+        'wards': 'wards_rooms_beds',
+        'rooms': 'wards_rooms_beds',
+        'beds': 'wards_rooms_beds',
+        'billing_masters': 'billing_masters',
+        'prescription_templates': 'prescription_templates'
+      }.get(col, '');
+    }
+
+    function canWriteCollection(col) {
+      return moduleOf(col) != ''
+        && (can(moduleOf(col), 'create') || can(moduleOf(col), 'edit'));
+    }
+
+    match /unique_keys/{key} {
+      allow read: if isActive();
+      // A create fails if the key already exists (it would be an update),
+      // which is what makes the reservation atomic.
+      allow create: if request.resource.data.createdBy == uid()
+        && canWriteCollection(request.resource.data.collection);
+      allow delete: if canWriteCollection(resource.data.collection);
+      allow update: if false;
+    }
+
+    // ---------- master data ----------
+    // Reference data is readable by every active staff member because
+    // operational modules need it (e.g. department lists at registration).
+    // Admin Panel pages additionally require the module `view` permission.
+
+    match /departments/{id} {
+      function valid() { return nonEmpty('code', 20) && nonEmpty('name', 120); }
+      allow read: if isActive();
+      allow create: if canCreate('departments') && valid();
+      allow update: if canUpdate('departments') && valid();
+      allow delete: if false;
+    }
+
+    match /doctors/{id} {
+      function valid() {
+        return nonEmpty('code', 20) && nonEmpty('fullName', 120)
+          && nonEmpty('qualification', 120) && nonEmpty('phone', 20)
+          && optNumber('consultationFee');
+      }
+      allow read: if isActive();
+      allow create: if canCreate('doctors') && valid()
+        && refActive('departments', request.resource.data.departmentId);
+      allow update: if canUpdate('doctors') && valid()
+        && (!changed('departmentId')
+            || refActive('departments', request.resource.data.departmentId));
+      allow delete: if false;
+    }
+
+    match /opd_charges/{id} {
+      function valid() {
+        return nonEmpty('code', 20) && nonEmpty('name', 120)
+          && request.resource.data.amount is number
+          && request.resource.data.amount >= 0;
+      }
+      allow read: if isActive();
+      allow create: if canCreate('opd_charges') && valid();
+      allow update: if canUpdate('opd_charges') && valid();
+      allow delete: if false;
+    }
+
+    match /lab_tests/{id} {
+      function valid() {
+        return nonEmpty('code', 20) && nonEmpty('name', 120)
+          && request.resource.data.charge is number
+          && request.resource.data.charge >= 0;
+      }
+      allow read: if isActive();
+      allow create: if canCreate('lab_tests') && valid();
+      allow update: if canUpdate('lab_tests') && valid();
+      allow delete: if false;
+    }
+
+    match /medicines/{id} {
+      function valid() {
+        return nonEmpty('code', 20) && nonEmpty('name', 120)
+          && optNumber('salePrice') && optNumber('lowStockThreshold');
+      }
+      allow read: if isActive();
+      allow create: if canCreate('medicines') && valid();
+      allow update: if canUpdate('medicines') && valid();
+      allow delete: if false;
+    }
+
+    match /wards/{id} {
+      function valid() { return nonEmpty('code', 20) && nonEmpty('name', 120); }
+      allow read: if isActive();
+      allow create: if canCreate('wards_rooms_beds') && valid();
+      allow update: if canUpdate('wards_rooms_beds') && valid();
+      allow delete: if false;
+    }
+
+    match /rooms/{id} {
+      function valid() { return nonEmpty('roomNumber', 20); }
+      allow read: if isActive();
+      allow create: if canCreate('wards_rooms_beds') && valid()
+        && refActive('wards', request.resource.data.wardId);
+      allow update: if canUpdate('wards_rooms_beds') && valid()
+        && (!changed('wardId') || refActive('wards', request.resource.data.wardId));
+      allow delete: if false;
+    }
+
+    match /beds/{id} {
+      function valid() {
+        return nonEmpty('bedNumber', 20)
+          && request.resource.data.bedStatus in
+             ['available', 'reserved', 'cleaning', 'maintenance', 'occupied'];
+      }
+      // `occupied` is set only by the IPD admission workflow (backend).
+      function occupancyUntouched() {
+        return request.resource.data.bedStatus != 'occupied'
+          || (resource != null && resource.data.bedStatus == 'occupied');
+      }
+      allow read: if isActive();
+      allow create: if canCreate('wards_rooms_beds') && valid()
+        && request.resource.data.bedStatus != 'occupied'
+        && refActive('rooms', request.resource.data.roomId);
+      allow update: if canUpdate('wards_rooms_beds') && valid()
+        && occupancyUntouched()
+        && (resource.data.bedStatus != 'occupied' || !changed('bedStatus'))
+        && (!changed('roomId') || refActive('rooms', request.resource.data.roomId));
+      allow delete: if false;
+    }
+
+    match /billing_masters/{id} {
+      function valid() {
+        return nonEmpty('code', 20) && nonEmpty('name', 120)
+          && request.resource.data.type in
+             ['charge_head', 'payment_method', 'discount_rule'];
+      }
+      allow read: if isActive();
+      allow create: if canCreate('billing_masters') && valid();
+      allow update: if canUpdate('billing_masters') && valid() && !changed('type');
+      allow delete: if false;
+    }
+
+    match /prescription_templates/{id} {
+      // Metadata only: clinical content belongs to the Prescription module.
+      function valid() {
+        return nonEmpty('name', 120)
+          && request.resource.data.sharingScope in
+             ['owner_only', 'department', 'all_doctors']
+          && !request.resource.data.keys().hasAny([
+               'items', 'medicines', 'medications', 'clinicalContent',
+               'advice', 'diagnosis', 'confirmed', 'confirmedAt'
+             ]);
+      }
+      allow read: if isActive();
+      allow create: if canCreate('prescription_templates') && valid();
+      allow update: if canUpdate('prescription_templates') && valid();
+      allow delete: if false;
+    }
+
+    // ---------- settings ----------
+    match /hospital_settings/{docId} {
+      allow read: if isActive();
+      allow write: if can('hospital_profile', 'manage') && stampedNow()
+        && (!request.resource.data.keys().hasAny(['name']) || nonEmpty('name', 120));
+    }
+
+    match /numbering_settings/{docType} {
+      allow read: if isActive();
+      allow write: if can('numbering', 'manage') && stampedNow()
+        && nonEmpty('prefix', 10)
+        && request.resource.data.padding is int
+        && request.resource.data.padding >= 1
+        && request.resource.data.padding <= 12
+        && request.resource.data.resetPolicy in ['never', 'yearly', 'monthly', 'daily'];
+    }
+
+    match /print_settings/{docId} {
+      allow read: if isActive();
+      allow write: if can('print_settings', 'manage') && stampedNow();
+    }
+
+    match /system_settings/{docId} {
+      allow read: if isActive();
+      allow write: if stampedNow() && (
+        (docId == 'backup' && can('backup', 'manage'))
+        || (docId != 'backup' && can('system_settings', 'manage'))
+      );
+    }
+
+    // ---------- backend-only collections ----------
+    match /audit_logs/{id} {
+      allow read: if can('audit_logs', 'view');
+      allow write: if false;
+    }
+
+    match /counters/{docType} {
+      allow read: if can('numbering', 'view');
+      allow write: if false;
+    }
+
+    match /backup_runs/{id} {
+      allow read: if can('backup', 'view');
+      allow write: if false;
+    }
+  }
+}

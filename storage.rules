@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// Hospital logo uploads. Uses cross-service Firestore reads so the same
+// `hospital_profile.manage` permission as Firestore applies. Firebase asks to
+// grant Storage access to Firestore on first deploy.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function profile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+    function role() { return request.auth.token.get('role', ''); }
+    function canManageProfile() {
+      return request.auth != null
+        && profile().data.status == 'active'
+        && (role() == 'super_admin'
+            || 'manage' in firestore.get(/databases/(default)/documents/roles/$(role()))
+                 .data.permissions.get('hospital_profile', []));
+    }
+
+    match /hospital/{file} {
+      allow read: if request.auth != null;
+      allow write: if canManageProfile()
+        && request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/(png|jpeg|webp)');
+      allow delete: if canManageProfile();
+    }
+  }
+}
